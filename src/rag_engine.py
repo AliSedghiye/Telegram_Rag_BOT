@@ -1,16 +1,8 @@
-from functools import lru_cache
-
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 
-from config import (
-    CHROMA_DIR,
-    COLLECTION_NAME,
-    OLLAMA_BASE_URL,
-    EMBED_MODEL,
-    LLM_MODEL,
-)
+from config import CHROMA_DIR, OLLAMA_BASE_URL, EMBED_MODEL, LLM_MODEL
 
 PROMPT = ChatPromptTemplate.from_template(
     """
@@ -38,40 +30,53 @@ Answer:
 
 
 class VectorStoreNotReadyError(RuntimeError):
-    """Raised when a query is made before the vector store has been built."""
+    """Raised when a question is asked before the chat has sent any PDF."""
 
 
-@lru_cache
+_embeddings = None
+_llm = None
+_vectorstores: dict[str, Chroma] = {}
+
+
 def get_embeddings():
-    return OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+    global _embeddings
+    if _embeddings is None:
+        _embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL)
+    return _embeddings
 
 
-@lru_cache
-def get_vectorstore():
-    if not CHROMA_DIR.exists():
-        raise VectorStoreNotReadyError(
-            "Vector store not found. Run ingestion (POST /ingest) first."
-        )
-
-    return Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=get_embeddings(),
-        persist_directory=str(CHROMA_DIR),
-    )
-
-
-@lru_cache
 def get_llm():
-    return ChatOllama(
-        model=LLM_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        temperature=0,
-    )
+    global _llm
+    if _llm is None:
+        _llm = ChatOllama(model=LLM_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
+    return _llm
 
 
-def reset_vectorstore_cache():
-    """Call after re-ingesting so the next query picks up the fresh data."""
-    get_vectorstore.cache_clear()
+def _collection_name(chat_id) -> str:
+    return f"chat_{chat_id}"
+
+
+def get_vectorstore(chat_id) -> Chroma:
+    name = _collection_name(chat_id)
+    if name not in _vectorstores:
+        _vectorstores[name] = Chroma(
+            collection_name=name,
+            embedding_function=get_embeddings(),
+            persist_directory=str(CHROMA_DIR),
+        )
+    return _vectorstores[name]
+
+
+def add_documents(chat_id, chunks):
+    """Embed and store chunks in this chat's own collection, alongside any existing ones."""
+    get_vectorstore(chat_id).add_documents(chunks)
+
+
+def reset_user(chat_id):
+    """Delete this chat's collection so they can start over."""
+    name = _collection_name(chat_id)
+    get_vectorstore(chat_id).delete_collection()
+    _vectorstores.pop(name, None)
 
 
 def format_docs(docs):
@@ -91,8 +96,15 @@ def format_docs(docs):
     return "\n\n".join(formatted)
 
 
-def ask(question: str, k: int = 5):
-    retriever = get_vectorstore().as_retriever(search_kwargs={"k": k})
+def ask(chat_id, question: str, k: int = 5):
+    vectorstore = get_vectorstore(chat_id)
+
+    if not vectorstore.get(limit=1)["ids"]:
+        raise VectorStoreNotReadyError(
+            "You haven't sent me any PDFs yet. Send a PDF document, then ask your question."
+        )
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": k})
     docs = retriever.invoke(question)
 
     context = format_docs(docs)

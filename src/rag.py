@@ -1,5 +1,9 @@
 from rag_engine import ask, VectorStoreNotReadyError
 
+# Local terminal testing uses its own collection, separate from any Telegram chat.
+# Feed it with: python src/ingest.py <path-to-pdf>
+CHAT_ID = "cli"
+
 
 def main():
     while True:
@@ -12,7 +16,7 @@ def main():
             continue
 
         try:
-            answer, sources = ask(question)
+            answer, sources = ask(CHAT_ID, question)
         except VectorStoreNotReadyError as e:
             print(f"\n{e}")
             continue

@@ -1,23 +1,15 @@
-import shutil
+import sys
+from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
-from langchain_chroma import Chroma
 
-from config import (
-    DATA_DIR,
-    CHROMA_DIR,
-    COLLECTION_NAME,
-    OLLAMA_BASE_URL,
-    EMBED_MODEL,
-)
+import rag_engine
 
 
-def load_documents():
-    loader = PyPDFDirectoryLoader(str(DATA_DIR))
-    documents = loader.load()
-    return documents
+def load_pdf(file_path: Path):
+    loader = PyPDFLoader(str(file_path))
+    return loader.load()
 
 
 def split_documents(documents):
@@ -31,52 +23,22 @@ def split_documents(documents):
     return chunks
 
 
-def create_embeddings():
-    embeddings = OllamaEmbeddings(
-        model=EMBED_MODEL,
-        base_url=OLLAMA_BASE_URL,
-    )
-
-    return embeddings
-
-
-def save_to_chroma(chunks, embeddings):
-    if CHROMA_DIR.exists():
-        shutil.rmtree(CHROMA_DIR)
-
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        collection_name=COLLECTION_NAME,
-        persist_directory=str(CHROMA_DIR),
-    )
-
-    return vectorstore
-
-
-def run_ingestion():
-    print("Loading documents...")
-    documents = load_documents()
-    print(f"Loaded {len(documents)} documents/pages")
-
-    print("Splitting documents...")
+def ingest_pdf(chat_id, file_path: Path) -> int:
+    """Load, chunk, embed and store a single PDF into this chat's own collection."""
+    documents = load_pdf(file_path)
     chunks = split_documents(documents)
-    print(f"Created {len(chunks)} chunks")
-
-    print("Creating embeddings...")
-    embeddings = create_embeddings()
-
-    print("Saving to ChromaDB...")
-    save_to_chroma(chunks, embeddings)
-
-    return chunks
+    rag_engine.add_documents(chat_id, chunks)
+    return len(chunks)
 
 
 def main():
-    chunks = run_ingestion()
-    print("Done.")
-    print(f"Created {len(chunks)} chunks")
-    print(f"Vector database saved at: {CHROMA_DIR}")
+    if len(sys.argv) != 2:
+        print("Usage: python src/ingest.py <path-to-pdf>")
+        return
+
+    file_path = Path(sys.argv[1])
+    chunk_count = ingest_pdf("cli", file_path)
+    print(f"Ingested {chunk_count} chunks into the local 'cli' collection.")
 
 
 if __name__ == "__main__":

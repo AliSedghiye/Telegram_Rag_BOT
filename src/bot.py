@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import tempfile
 from pathlib import Path
 
 from telegram import Update
@@ -11,9 +12,9 @@ from telegram.ext import (
     filters,
 )
 
-import ingest_manager
+import ingest
 import rag_engine
-from config import DATA_DIR, TELEGRAM_ADMIN_IDS, TELEGRAM_BOT_TOKEN
+from config import TELEGRAM_BOT_TOKEN
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,11 +22,11 @@ logger = logging.getLogger(__name__)
 TELEGRAM_MAX_LEN = 4000
 
 WELCOME_MESSAGE = (
-    "Hi! Ask me anything about the mobility program documents and I'll answer "
-    "using only what's in them.\n\n"
+    "Hi! Send me a PDF document, then ask me questions about it and I'll answer "
+    "using only what's in it.\n\n"
+    "Your documents are private to this chat.\n\n"
     "Commands:\n"
-    "/ingest - rebuild the knowledge base from the source PDFs\n"
-    "/status - check the last ingestion result"
+    "/reset - forget the PDFs you've sent and start over"
 )
 
 
@@ -34,15 +35,35 @@ async def _reply_long(update: Update, text: str):
         await update.message.reply_text(text[i : i + TELEGRAM_MAX_LEN])
 
 
-def _is_authorized(update: Update) -> bool:
-    if not TELEGRAM_ADMIN_IDS:
-        return True
-    user = update.effective_user
-    return bool(user and user.id in TELEGRAM_ADMIN_IDS)
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(WELCOME_MESSAGE)
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    document = update.message.document
+    chat_id = update.effective_chat.id
+
+    await update.message.reply_text(f"Got {document.file_name}, reading it...")
+
+    loop = asyncio.get_running_loop()
+    try:
+        telegram_file = await document.get_file()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            file_path = Path(tmp_dir) / document.file_name
+            await telegram_file.download_to_drive(str(file_path))
+            chunk_count = await loop.run_in_executor(
+                None, ingest.ingest_pdf, chat_id, file_path
+            )
+    except Exception:
+        logger.exception("Failed to ingest document")
+        await update.message.reply_text(
+            "Sorry, I couldn't process that PDF. Please try again."
+        )
+        return
+
+    await update.message.reply_text(
+        f"Added {document.file_name} ({chunk_count} chunks). Ask away!"
+    )
 
 
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,11 +71,14 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not question:
         return
 
+    chat_id = update.effective_chat.id
     await update.message.chat.send_action("typing")
 
     loop = asyncio.get_running_loop()
     try:
-        answer, sources = await loop.run_in_executor(None, rag_engine.ask, question)
+        answer, sources = await loop.run_in_executor(
+            None, rag_engine.ask, chat_id, question
+        )
     except rag_engine.VectorStoreNotReadyError as e:
         await update.message.reply_text(str(e))
         return
@@ -76,49 +100,13 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_long(update, "\n".join(lines))
 
 
-async def ingest_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_authorized(update):
-        await update.message.reply_text("You are not authorized to run this command.")
-        return
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
 
-    if not DATA_DIR.exists() or not any(DATA_DIR.glob("*.pdf")):
-        await update.message.reply_text(f"No PDF files found in {DATA_DIR}")
-        return
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, rag_engine.reset_user, chat_id)
 
-    if not ingest_manager.try_start():
-        await update.message.reply_text("Ingestion is already running.")
-        return
-
-    await update.message.reply_text("Starting ingestion, this may take a while...")
-
-    async def run():
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, ingest_manager.run)
-
-        status = ingest_manager.get_status()
-        if status["last_run_status"] == "success":
-            await update.message.reply_text(
-                f"Ingestion complete ({status['last_run_chunks']} chunks)."
-            )
-        else:
-            await update.message.reply_text(f"Ingestion failed: {status['last_run_error']}")
-
-    asyncio.create_task(run())
-
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status = ingest_manager.get_status()
-
-    if status["running"]:
-        await update.message.reply_text("Ingestion is currently running.")
-    elif status["last_run_status"] is None:
-        await update.message.reply_text("No ingestion has run yet. Send /ingest to build the knowledge base.")
-    elif status["last_run_status"] == "success":
-        await update.message.reply_text(
-            f"Last ingestion succeeded ({status['last_run_chunks']} chunks)."
-        )
-    else:
-        await update.message.reply_text(f"Last ingestion failed: {status['last_run_error']}")
+    await update.message.reply_text("Done — I've forgotten your PDFs. Send a new one to start over.")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -133,8 +121,8 @@ def build_application() -> Application:
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", start))
-    application.add_handler(CommandHandler("ingest", ingest_command))
-    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("reset", reset_command))
+    application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
     application.add_error_handler(on_error)
 
