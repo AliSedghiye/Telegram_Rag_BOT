@@ -6,5 +6,4 @@ langchain-text-splitters
 pypdf
 python-dotenv
 requests
-fastapi
-uvicorn[standard]
+python-telegram-bot

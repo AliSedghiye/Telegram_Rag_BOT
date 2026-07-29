@@ -21,3 +21,12 @@ COLLECTION_NAME = "mobility_rag_collection"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")
+
+# Telegram bot settings
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Optional allowlist of Telegram user IDs permitted to run /ingest.
+# Comma-separated, e.g. "111111,222222". Leave empty to allow anyone.
+TELEGRAM_ADMIN_IDS = {
+    int(uid) for uid in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if uid.strip()
+}

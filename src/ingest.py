@@ -54,7 +54,7 @@ def save_to_chroma(chunks, embeddings):
     return vectorstore
 
 
-def main():
+def run_ingestion():
     print("Loading documents...")
     documents = load_documents()
     print(f"Loaded {len(documents)} documents/pages")
@@ -69,7 +69,13 @@ def main():
     print("Saving to ChromaDB...")
     save_to_chroma(chunks, embeddings)
 
+    return chunks
+
+
+def main():
+    chunks = run_ingestion()
     print("Done.")
+    print(f"Created {len(chunks)} chunks")
     print(f"Vector database saved at: {CHROMA_DIR}")
 
 
