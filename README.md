@@ -74,11 +74,46 @@ For testing the engine without Telegram:
 python src/rag.py
 ```
 
+## Deploy with Docker
+
+The easiest way to run this on a server: `docker-compose.yml` runs the bot and an Ollama server together, with persistent volumes for models and the vector store.
+
+**Prerequisites:** Docker + Docker Compose plugin installed on the server.
+
+1. Create a `.env` file in the project root (same variables as above — at minimum `TELEGRAM_BOT_TOKEN`). Leave `OLLAMA_BASE_URL` unset; compose sets it automatically to reach the `ollama` service.
+2. Put your PDFs in `Data/raw/`.
+3. Start the stack:
+   ```bash
+   docker compose up -d
+   ```
+4. Pull the models into the `ollama` container (one-time, persisted in the `ollama_data` volume):
+   ```bash
+   docker compose exec ollama ollama pull nomic-embed-text
+   docker compose exec ollama ollama pull qwen2.5:7b-instruct
+   ```
+5. Run ingestion:
+   ```bash
+   docker compose exec bot python src/ingest.py
+   ```
+   (or send `/ingest` to the bot in Telegram once it's running).
+6. Check logs / status:
+   ```bash
+   docker compose logs -f bot
+   ```
+
+Notes:
+
+- **GPU:** if the server has an NVIDIA GPU, uncomment the `deploy.resources` block under the `ollama` service in `docker-compose.yml` for much faster inference.
+- **Persistence:** `ollama_data` keeps downloaded models, `vectorstore_data` keeps the Chroma database — both survive `docker compose down` (use `docker compose down -v` to wipe them).
+- **Updating:** after pulling code changes, run `docker compose up -d --build` to rebuild the bot image.
+
 ## Project structure
 
 ```
 Data/raw/              # source PDFs
 vectorstore/           # generated Chroma database (gitignored)
+Dockerfile             # bot container image
+docker-compose.yml     # bot + Ollama services for server deployment
 run_bot.py             # launches the Telegram bot
 src/config.py          # paths & Ollama/Telegram settings
 src/ingest.py          # PDF -> chunks -> embeddings -> Chroma

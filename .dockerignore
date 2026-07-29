@@ -1,0 +1,12 @@
+.venv
+.git
+.gitignore
+.vscode
+.claude
+__pycache__
+*.pyc
+.env
+Data
+vectorstore
+README.md
+LICENSE
